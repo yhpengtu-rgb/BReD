@@ -1,0 +1,591 @@
+{
+  "version": "v7",
+  "route": "图优化 + 算子融合（文献重做版，A-E 占位定版）",
+  "basis_version": "v5.6",
+  "status": "v7.6 (I) 通过：图像预渲染缓存把 loader 从 ~190 ms/帧 降到 ~20 ms/帧，391 E2E 96.6 -> 83.3 s（配对 -13.4 s），位级一致。loader 解绑后 v7.3 (C) 与 v7.4 (D) 的收益才兑现：C -2.3 s，D -14.4 s，三者合并 66.3 s（配对 -30.4 s，-31%）。v7.2 (B) 微收益保持 opt-in；v7.1 (A) 关闭；v7.5 (E) 暂缓",
+  "wrote_at": "2026-11-19T15:30:00",
+  "goal": "在不改权重值、不改评测协议、不覆盖 v5.6 产物的前提下，从算子融合与计算图侧把 v5.6 的 98.939 s 压到 84-93 s",
+  "baseline_v5_6": {
+    "e2e_wall_s": 98.939,
+    "stage1_wall_s": 92.343,
+    "stage2_wall_s": 6.587,
+    "gap_s": 0.003,
+    "s1_eval_s": 74.515,
+    "frames": 391,
+    "coarse_Z_RMSE_m": 0.1954516,
+    "fine_Z_RMSE_m": 0.09809557,
+    "matched": [
+      5814082,
+      5813805
+    ],
+    "gpu_sum_ms_per_frame": 184,
+    "measured_eval_ms_per_frame": 190.6,
+    "launch_gap_ms_per_frame": 6.6
+  },
+  "protocol": {
+    "entry": "复用 v5/eval_v5.py + v2/eval_v2.py；每个 v7.x 只新增 opt-in env 或独立模块，默认关闭",
+    "gates": {
+      "coarse": "<= 0.1984516 m（v5.6 + 0.003）",
+      "fine": "<= 0.10109557 m（v5.6 + 0.003）",
+      "matched_ratio": ">= 0.99",
+      "screen": "20 帧增量 > 0.002 m 即判死，不进 391"
+    },
+    "e2e_acceptance": "391/391 连续 Stage1 + 同会话 Stage2，与 v5.6 配对比较；E2E 噪声带 ±1~3 s",
+    "hard_never": [
+      "不改任何权重值（含 BN 归并）",
+      "不训练/不重标定",
+      "不覆盖 v5.6 任何产物",
+      "不启用 INT8、剪枝、再降采样",
+      "不重复已闭环路线"
+    ]
+  },
+  "preflight": {
+    "id": "v7.0_probe",
+    "name": "测量探针（先于一切实现）",
+    "content": "20 帧 CUDA Event 分段计时 + nvidia-smi dmon 利用率采样 + 每帧 kernel launch 计数（torch profiler 或 cudaGetLastError 计数代理）",
+    "purpose": "钉死 v7.3 的可回收 launch gap 与 v7.5 的双流重叠空间；若 gap < 4 ms/帧 则 v7.3 降级",
+    "status": "已完成"
+  },
+  "slots": [
+    {
+      "version": "v7.1",
+      "id": "A_head_cambatch",
+      "name": "head 相机维 batch grid_sample 上 GPU 验收",
+      "mechanism": "已实现 b57_head_cambatch：3 scale x 6 camera 的 18 次 grid_sample 合成 3 次，CPU torch.equal 全 True",
+      "literature": [
+        "BEVStereo/BEVDepth 部署实践：合并独立相机分支",
+        "torch grid_sample 调用面减少"
+      ],
+      "expected_gain_s": [
+        1.2,
+        2.3
+      ],
+      "risk": "低：逐位等价已验证；仅需 GPU 上复验 torch.equal",
+      "acceptance": "20 帧 torch.equal 全 True + 391 coarse/fine/matched 与 v5.6 逐帧差 <= 1e-5 m",
+      "deps": [],
+      "status": "关闭（无收益）",
+      "result_20f": {
+        "coarse_rmse": 0.16850654476632618,
+        "coarse_ref": 0.16850654455874364,
+        "coarse_diff_m": 2.08e-10,
+        "fine_rmse": 0.09372548994883757,
+        "fine_ref": 0.09372548998419589,
+        "fine_diff_m": 3.54e-11,
+        "matched": [
+          178539,
+          178545
+        ],
+        "matched_ref": [
+          178539,
+          178545
+        ],
+        "head_median_ms_per_frame": {
+          "off": 40.1,
+          "on": 26.1,
+          "saving": 14.0
+        },
+        "head_total_s_20f": {
+          "off": 1.1,
+          "on": 0.8
+        },
+        "projected_e2e_saving_s": 5.5,
+        "verdict": "PASS：输出为浮点噪声级等价，head 中位省 14.0 ms/帧"
+      },
+      "result_391": {
+        "e2e_wall_s": 100.725,
+        "stage1_wall_s": 93.861,
+        "s1_eval_s": 77.069,
+        "same_session_baseline": {
+          "e2e_wall_s": 100.4,
+          "stage1_wall_s": 93.297,
+          "s1_eval_s": 74.594
+        },
+        "paired_eval_delta_s": 2.475,
+        "accuracy": "逐位相同（coarse 0.19545159985612806 vs 0.19545159997378928）"
+      },
+      "result_ab40": {
+        "head_median_ms": {
+          "base": [
+            25.8,
+            25.8
+          ],
+          "cambatch": [
+            25.8,
+            25.4
+          ]
+        },
+        "eval_elapsed_s": {
+          "base": [
+            11.029,
+            10.799
+          ],
+          "cambatch": [
+            11.177,
+            11.245
+          ]
+        },
+        "conclusion": "head 稳态中位无差异；合并 grid_sample 只减 launch，不减 GPU 工作量，且多出的 cat/reshape 有 CPU 开销。20 帧出现的 -14 ms 是前几帧参与中位数的假象。"
+      },
+      "verdict": "REJECT：不并入默认路径，代码保留为 opt-in"
+    },
+    {
+      "version": "v7.2",
+      "id": "B_splat_fused",
+      "name": "depth-prob -> expected depth -> splat 融合 CUDA 算子",
+      "mechanism": "FP32 扩展：softmax 期望深度、双线性四角权重、index_add（hit/z_num/z_den）在 shared memory 内一次完成，取消 feat_all/weights/lin 中间张量",
+      "literature": [
+        "FlashBEV, ECCV'26, arXiv 2607.10071：gather-reduction 重构，5.2x，max error 0",
+        "BEVPoolV3, NVIDIA 2026：interval-owned writes 无 atomics，274us->17us",
+        "BEVPoolv2, arXiv 2211.17111：省掉 frustum 物化，VT 15.1x"
+      ],
+      "expected_gain_s": [
+        0.5,
+        1.5
+      ],
+      "risk": "中：float 累加顺序改变，需 elementwise atol 校验；不改语义与形状",
+      "acceptance": "同输入逐元素 max|dz| <= 2e-5 m；391 门限与 v5.6 一致",
+      "deps": [
+        "v7.0_probe"
+      ],
+      "status": "通过（微收益，保持 opt-in，V7_SPLAT_FUSED=1；不并入默认）",
+      "result_equiv": {
+        "scope": "首帧同输入对照 b54_bevpool.splat_shared",
+        "max_abs_diff": {
+          "bev": 8.3e-07,
+          "z_num": 1.5e-05,
+          "z_den": 1.1e-05
+        },
+        "note": "差值来自 CUDA index_add 的 atomicAdd 累加顺序不确定性（与 svd 无关）；自比对同量级"
+      },
+      "result_ab_inproc": {
+        "method": "同进程、同输入、交替 5 次预热 + 20 次 CUDA Event 取中位",
+        "prev_ms_per_sweep": 1.633,
+        "fused_ms_per_sweep": 1.526,
+        "delta_ms_per_sweep": -0.107,
+        "delta_ms_per_frame": -0.214,
+        "projected_e2e_saving_s": 0.084
+      },
+      "result_20f": {
+        "coarse_rmse": 0.16850654455,
+        "coarse_ref": 0.16850654486,
+        "fine_rmse": 0.09372548981,
+        "fine_ref": 0.09372548976,
+        "matched": [
+          178539,
+          178545
+        ],
+        "matched_ref": [
+          178539,
+          178545
+        ],
+        "with_cuda_graph": {
+          "coarse_rmse": 0.16850654506,
+          "fine_rmse": 0.093725512,
+          "matched": [
+            178539,
+            178545
+          ]
+        }
+      },
+      "result_391": {
+        "paired_base": {
+          "e2e_wall_s": 101.424,
+          "stage1_wall_s": 94.342,
+          "s1_eval_s": 76.31
+        },
+        "fused": {
+          "e2e_wall_s": 102.847,
+          "stage1_wall_s": 95.46,
+          "s1_eval_s": 77.013
+        },
+        "accuracy": {
+          "coarse": 0.19545159988,
+          "fine": 0.0980955898,
+          "matched": [
+            5814082,
+            5813805
+          ],
+          "base_coarse": 0.19545159991,
+          "base_fine": 0.09809558979,
+          "base_matched": [
+            5814082,
+            5813805
+          ],
+          "s2_psnr": 25.114946365356445
+        },
+        "note": "E2E 噪声带 ±3 s（同配置重跑 98.342 / 101.424）远大于预期 -0.08 s，391 口径无法分辨；p50 判定依据是进程内 A/B"
+      },
+      "verdict": "PASS（微收益）：splat 1.633 -> 1.526 ms/sweep，精度与 matched 完全一致；预计 E2E -0.08 s（0.08%），低于测量噪声，因此只保留 opt-in，不做默认化",
+      "implementation": {
+        "module": "bench_opt/goal/method_version/v7/c72_splat_fused.py",
+        "opt_in": "V7_SPLAT_FUSED=1（V7_B_VERIFY=1 做首帧对照）",
+        "changes": [
+          "取消 feat_all(BN,C,4,P) + permute(1,0,2,3).reshape 触发的第二份全量源拷贝：改为 (C,Nc,P) 视图直接广播乘出 (C,Nc,4,P)",
+          "hit 与 z_den 是同一组权重的同一求和，删掉重复的 index_add 与缓冲",
+          "hit/z_num 合并进同一个 2 通道累加器，少 2 次 launch"
+        ],
+        "memory_peak": "源张量峰值由 2 份降到 1 份",
+        "constraint_kept": "不改语义、不改权重、不改评测协议；与 v7.3 CUDA Graph 可同时开启（已实测捕获成功）"
+      }
+    },
+    {
+      "version": "v7.3",
+      "id": "C_cuda_graph_wide",
+      "name": "CUDA Graph 最大范围捕获（替换旧 ResNet-only 实现）",
+      "mechanism": "静态输入 buffer + copy_()，抓取 [ResNet/neck/DepthNet -> head -> splat -> z/BEV 输出] 整段；侧流 warmup >=3 次，捕获期零 host sync、零分配；每次 replay 前等待写 buffer",
+      "literature": [
+        "PyTorch 1.13 CUDA semantics: side-stream warmup, graph-private pool, may replay on any stream",
+        "make_graphed_callables: 部分网络捕获路径",
+        "NVIDIA: 2.5us + 1ns/node，设备侧 ~60ns/node；graph 只省 launch",
+        "PyTorch Mask R-CNN: graphed ResNet 31->6 ms 属 CPU-bound 场景"
+      ],
+      "expected_gain_s": [
+        1.0,
+        2.6
+      ],
+      "risk": "中：上限由实测 6.6 ms/帧 launch gap 决定；splat 的 index_add 可捕获，需验证静态地址",
+      "acceptance": "replay 输出与 eager 逐位相等（20 帧）后再做 391；E2E 配对",
+      "deps": [
+        "v7.0_probe"
+      ],
+      "supersedes": "v5.8 / 旧 'CUDA Graph ResNet'",
+      "status": "通过（并入默认 opt-in，V7_CUDA_GRAPH=1）",
+      "result_20f": {
+        "coarse_rmse": 0.16850654462161632,
+        "coarse_ref": 0.16850654476632618,
+        "fine_rmse": 0.09372551200341264,
+        "fine_ref": 0.09372548994883757,
+        "fine_diff_m": 2.2e-08,
+        "matched": [
+          178539,
+          178545
+        ],
+        "verify_vs_eager_max_abs": {
+          "diag.depth_bev_z": 3.815e-06,
+          "initial.z": 5.96e-07,
+          "diag.z_coarse": 3.576e-07,
+          "initial.xy": 0.0
+        },
+        "eval_elapsed_s": 8.751,
+        "note": "20 帧含首次捕获开销 3 warmup + 1 capture + empty_cache"
+      },
+      "result_ab60": {
+        "base_eval_s": 13.633,
+        "graph_eval_s": 14.941,
+        "base_marginal_ms_per_frame": 157.9,
+        "graph_marginal_ms_per_frame": 154.8,
+        "note": "60 帧含约 1.1 s 捕获开销；用 20/60 帧边际差扣掉冷启动后图省约 3 ms/帧"
+      },
+      "result_391": {
+        "paired_base": {
+          "e2e_wall_s": 103.337,
+          "stage1_wall_s": 96.486,
+          "s1_eval_s": 76.934
+        },
+        "graph": {
+          "e2e_wall_s": 98.342,
+          "stage1_wall_s": 91.043,
+          "s1_eval_s": 75.027
+        },
+        "e2e_delta_s": -4.995,
+        "s1_eval_delta_s": -1.907,
+        "accuracy": {
+          "coarse": 0.19545159988477415,
+          "fine": 0.09809558978158991,
+          "matched": 5814082,
+          "base_coarse": 0.19545160005880008,
+          "base_fine": 0.09809557471162515,
+          "base_matched": 5814082
+        },
+        "gates": {
+          "coarse_ok": true,
+          "fine_ok": true,
+          "matched_ratio": 1.0
+        }
+      },
+      "verdict": "PASS：E2E 98.342 s（同会话配对 -4.995 s），精度与 v5.6 同量级（coarse Δ1.7e-10 m、fine Δ1.5e-8 m，matched 完全一致）",
+      "implementation": {
+        "module": "bench_opt/goal/method_version/v7/c73_cuda_graph.py",
+        "opt_in": "V7_CUDA_GRAPH=1（V7_CG_VERIFY=1 做逐帧 eager 对照，V7_CG_WARMUP 默认 3）",
+        "capture_scope": "imgs -> backbone(ResNet/neck/DepthNet/连续 splat/bev) -> RoGS head(encoder/几何头/refiner) -> initial+diag",
+        "outside_graph": "XY 网格、世界坐标变换、RoadGT 匹配、stats（必须留 eager）",
+        "static_buffers": "imgs/mats/timestamps 用 copy_ 填；每帧先算 5 个逆矩阵（cuSOLVER 不可捕获）",
+        "prereq_changes": [
+          "b54_bevpool: torch.inverse -> mats[ida_inv/intrin_inv]；repeat_interleave -> expand+reshape；几何标量缓存（float(int) 是 host sync）",
+          "b55_head_geo: torch.inverse(bda/sensor2ego) -> mats[bda_inv/sensor2ego_inv]",
+          "eval_v5.make_bin_bias: bias 设备副本缓存（原实现每帧 H2D）",
+          "continuous_lift_fpn: 同样的逆矩阵/几何标量/expand 处理（base pool 路径）"
+        ],
+        "known_limits": [
+          "--split-timing 的 hook 每段 synchronize，不能与捕获同用",
+          "refiner_outer_loops>0 会 fork RNG，被显式拒绝",
+          "torch 1.13 只有 global 捕获错误模式；DataLoader pinned 预取在本次未造成失效"
+        ]
+      }
+    },
+    {
+      "version": "v7.4",
+      "id": "D_trt_resnet_neck",
+      "name": "TensorRT 仅覆盖 ResNet50+neck（单引擎零拷贝，重做）",
+      "mechanism": "显式 batch 6x3x576x1024；set_tensor_address 一次 + execute_async_v3(current_stream)；静态 torch I/O buffer；FP32 先对齐，FP16 单独成臂",
+      "literature": [
+        "TensorRT 8.6 Python ExecutionContext: execute_async_v3，Python 与 C++ 性能接近",
+        "Torch-TensorRT: TRT 子图与 torch 算子可共录一个 CUDAGraph",
+        "TRT 10.2 release notes: GridSample 网络最多 4x 回退（故不覆盖 head）",
+        "已知失败根因：DCNv2 插件、activation cudaMalloc 与 torch allocator 冲突"
+      ],
+      "expected_gain_s": [
+        3.0,
+        6.0
+      ],
+      "risk": "高：历史上三条 TRT 臂均关闭；本版必须零拷贝、单 context、无插件",
+      "acceptance": "backbone 输出 max|diff| <= 1e-4；20 帧筛查后 391；若 FP32 无收益则 FP16 臂不作数",
+      "deps": [
+        "v7.0_probe"
+      ],
+      "supersedes": "v5.9 / 旧三条 TRT 臂",
+      "status": "v7.6 之后通过（保持 opt-in，V7_TRT_BACKBONE=1）：单独开以及与 loader 解绑前无 E2E 收益；与 v7.6 图像预缓存合并 391 配对 -14.35 s",
+      "recheck_after_v7_6": {
+        "date": "2026-11-19",
+        "trt_alone_391": {"e2e_wall_s": 100.302, "s1_eval_s": 75.242,
+                          "note": "单独开仍无收益（loader-bound，结论未变）"},
+        "precache_391": {"e2e_wall_s": 83.275, "s1_eval_s": 59.770},
+        "precache_trt_391": {"e2e_wall_s": 69.124, "s1_eval_s": 45.422,
+                             "paired_delta_vs_precache_s": -14.35},
+        "precache_trt_graph_391": {"e2e_wall_s": [66.254, 66.888],
+                                   "s1_eval_s": [43.367, 43.949]},
+        "accuracy": {"coarse": 0.19545356255, "fine": 0.09808106726,
+                     "matched": [5814094, 5813831],
+                     "gates": {"coarse_ok": true, "fine_ok": true,
+                               "matched_ratio": 0.999998}},
+        "verdict": "原『E2E 无收益』的结论由 loader 上限造成，不是 TRT 本身；loader 解绑后 D 是 v7 系列单点最大的 GPU 收益（-14.35 s）"
+      },
+      "result_split24": {
+        "base_backbone_ms_per_frame": 117.3,
+        "trt_backbone_ms_per_frame": 78.1,
+        "base_resnet_ms_per_sweep": 32.5,
+        "base_neck_ms_per_sweep": 1.7,
+        "note": "--split-timing 中位数；TRT 后 backbone 再无 resnet/neck 段"
+      },
+      "result_391_probe": {
+        "base": {
+          "fwd_ev_ms_steady": 141.3,
+          "frame_total_ms_steady": 151.4,
+          "sum_frame_total_s": 67.42,
+          "loader_gap_s": 5.85,
+          "eval_elapsed_s": 74.846
+        },
+        "trt": {
+          "fwd_ev_ms_steady": 104.1,
+          "frame_total_ms_steady": 114.2,
+          "sum_frame_total_s": 51.98,
+          "loader_gap_s": 23.0,
+          "eval_elapsed_s": 76.761
+        }
+      },
+      "result_391": {
+        "base": {
+          "e2e_wall_s": 99.465,
+          "coarse": 0.19545159989,
+          "fine": 0.09809557462,
+          "matched": 5814082
+        },
+        "trt": {
+          "e2e_wall_s": 100.706,
+          "coarse": 0.19545356237,
+          "fine": 0.09808105193,
+          "matched": 5814094
+        },
+        "accuracy_ok": true,
+        "e2e_gain_s": -1.241
+      },
+      "verdict": "REJECT（对官方 E2E 口径）：单帧 GPU 前向稳定快 37-43 ms（backbone 117.3->78.1 ms、fwd_ev 141.3->104.1 ms），但 eval 循环被 DataLoader 卡在 ~190 ms/帧；TRT 省下的时间全部变成 loader 等待（gap 5.85 s -> 23.00 s），391 E2E 反而 +1.24 s。精度达标（coarse +1.96e-6 m、fine -1.45e-5 m、matched +12）。",
+      "implementation": {
+        "module": "bench_opt/goal/method_version/v7/d74_trt_backbone.py",
+        "opt_in": "V7_TRT_BACKBONE=1（V7_TRT_VERIFY=1 首帧对照；V7_TRT_ENGINE 指定引擎）",
+        "engine": "v7/engine/resnet50_neck_fp32_notf32.engine（115.9 MB，TF32 显式 clear，真 FP32，构建 34.7 s）",
+        "scope": "仅 img_backbone(ResNet50)+img_neck(SECONDFPN)；DepthNet/stereo/head/matcher 全留 torch",
+        "zero_copy": "静态输入 buffer + 两组双缓冲输出（sweep0/sweep1 各一组），链上不 clone、不同步",
+        "hook_bridge": "img_backbone 被绕过，c2/c3/c4 由引擎输出直接填 model._img_feats，替代 forward hook",
+        "onnx": "bench_opt/probe/trt_graph/resnet50_neck_v2.onnx（既有产物，算子仅 Conv/BN/Relu/Add/Concat/MaxPool/ConvTranspose，无插件）"
+      },
+      "structural_finding": "评测循环是 loader-bound：base 在环内 67.4 s + 等待 5.9 s，TRT 在环内 52.0 s + 等待 23.0 s。GPU 只要快于 ~190 ms/帧，E2E 就完全不变。这同时解释了 v7.1/v7.5 的关闭结论，也意味着 v7 系列的 GPU 侧收益在本口径下已到顶。"
+    },
+    {
+      "version": "v7.5",
+      "id": "E_dual_stream",
+      "name": "同帧双 sweep 双流重叠",
+      "mechanism": "两个 sweep 的 ResNet/neck/DepthNet 完全独立，两路 non-default stream + event 汇合后再顺序 splat/head",
+      "literature": [
+        "TensorRT optimization guide: within-inference multi-streaming",
+        "CUDA Graph 多流捕获需 fork/join，事件须在捕获内记录"
+      ],
+      "expected_gain_s": [
+        0.0,
+        3.0
+      ],
+      "risk": "高：若 GPU 已饱和则零收益；仅在 v7.0 探针利用率 < 85% 时启动",
+      "acceptance": "输出与单流逐位相等 + 391 配对提速 >= 1.5 s，否则关闭",
+      "deps": [
+        "v7.0_probe"
+      ],
+      "status": "占位（条件启动）"
+    },
+    {
+      "version": "v7.6",
+      "id": "I_img_precache",
+      "name": "整场景图像预渲染缓存（替代 PIL 解码 / resize / imnormalize）",
+      "mechanism": "锁定变换是确定性的（0 crop/flip/rotate/colour jitter，固定 0.64 resize），因此每张图的最终 float32 HWC 张量只与文件内容有关。把整场景 1388 张唯一图一次性渲染进 9.15 GB memmap；评测时按 basename 查表，用同一份张量替换 Image.open + img_transform_local + mmcv.imnormalize 三步",
+      "literature": [
+        "数据管线去重：确定性 transform 可预物化（torchdata / WebDataset 的 preprocess-once 模式）",
+        "实测：loader 是 Stage1 评测循环的唯一上限（v7.4 structural_finding）"
+      ],
+      "expected_gain_s": [
+        13.0,
+        30.0
+      ],
+      "risk": "低：缓存内容由真实管线生成，自检 max|diff| = 0；代价是 9.15 GB 磁盘 + 页缓存，以及 23 个 worker 进程共享只读 memmap",
+      "acceptance": "391 帧 coarse/fine/matched 与 base 同量级；loader 不再是瓶颈；与 C/D 可叠加",
+      "deps": [],
+      "status": "通过（opt-in，V7_IMG_PRECACHE=1；V7_IP_VERIFY=1 做自检）",
+      "diagnosis": {
+        "per_image_cpu": {
+          "pil_jpeg_decode": 7.85,
+          "pil_bicubic_resize_1600x900_to_1024x576": 30.3,
+          "mmcv_imnormalize": 8.0,
+          "torch_from_numpy_permute": 0.01,
+          "note": "ms/张，单线程；合计 ~46 ms"
+        },
+        "per_frame": {
+          "image_slots": 12,
+          "unique_images": 6,
+          "why": "scene0523_allframe_infos.pkl 的 cam_sweeps 为空，sweep 轴重复读同一 keyframe 的 6 张图",
+          "cpu_ms": 552
+        },
+        "scene": {
+          "frames": 391,
+          "unique_images": 1388,
+          "reuse": "相邻帧平均共享 2.46/6 张"
+        },
+        "rejected": "把 imnormalize 换成 uint8 LUT：实测 9.6 ms/张，比原实现的 7.4 ms 更慢（numpy fancy-index 开销），不可行"
+      },
+      "result_20f": {
+        "base_eval_s": 7.086,
+        "precache_eval_s": 6.312,
+        "coarse_rmse": [0.16850654474042, 0.16850654475316],
+        "fine_rmse": [0.093725489833, 0.093725490094],
+        "matched": [[178539, 178545], [178539, 178545]],
+        "selfcheck": "install 时对 3 张图重跑真实管线对照，max|diff| = 0.000e+00"
+      },
+      "result_391": {
+        "same_session_arms": {
+          "base": {"e2e_wall_s": [96.631, 97.332], "s1_eval_s": [73.120, 73.757]},
+          "precache": {"e2e_wall_s": [83.275], "s1_eval_s": [59.770]},
+          "precache+graph": {"e2e_wall_s": [79.623], "s1_eval_s": [57.522]},
+          "trt": {"e2e_wall_s": [100.302], "s1_eval_s": [75.242]},
+          "precache+trt": {"e2e_wall_s": [69.124], "s1_eval_s": [45.422]},
+          "precache+trt+graph": {"e2e_wall_s": [66.254, 66.888], "s1_eval_s": [43.367, 43.949]}
+        },
+        "paired_delta_s": {
+          "precache_vs_base": -13.36,
+          "precache_graph_vs_base": -17.01,
+          "precache_trt_vs_base": -27.51,
+          "precache_trt_graph_vs_base": -30.38,
+          "trt_alone_vs_base": 3.67
+        },
+        "steady_state_ms_per_frame": {
+          "base": {"body": 149.9, "fwd_ev": 138.7},
+          "precache": {"body": 144.0, "fwd_ev": 134.4},
+          "trt": {"body": 114.6, "fwd_ev": 103.4},
+          "precache_trt": {"body": 107.7, "fwd_ev": 98.5},
+          "precache_trt_graph": {"body": 100.6, "fwd_ev": 91.0}
+        },
+        "accuracy": {
+          "precache": {"coarse": 0.19545159978, "fine": 0.09809557456,
+                       "matched": [5814082, 5813805],
+                       "base_coarse": 0.19545159991, "base_fine": 0.09809557460,
+                       "base_matched": [5814082, 5813805]},
+          "precache_trt_graph": {"coarse": 0.19545356255, "fine": 0.09808106726,
+                                 "matched": [5814094, 5813831]},
+          "s2_psnr": 25.114946365356445,
+          "gates": {"coarse_ok": true, "fine_ok": true,
+                    "matched_ratio": 0.999998}
+        }
+      },
+      "verdict": "PASS：391 配对 -13.36 s（E2E 96.6->83.3 s），精度与 base 同量级（coarse Δ1.3e-10 m、fine Δ4e-11 m、matched 完全一致、Stage2 PSNR 逐位相同）。loader 解绑后 C 与 D 的收益才兑现：C 再 -2.25 s、D 再 -14.35 s，三者合并 66.3 s（-30.4 s / -31%）。D 原先的『E2E 无收益』结论由 loader 造成，在本口径下反转为通过",
+      "implementation": {
+        "module": "bench_opt/goal/method_version/v7/i76_img_precache.py",
+        "builder": "python i76_img_precache.py --build（62 s 单线程，产出 assets/cache/v7_img_f32/imgs_f32.dat）",
+        "opt_in": "V7_IMG_PRECACHE=1（V7_IP_VERIFY=1 自检 3 张图）",
+        "patch_point": "只替换 nusc_det_dataset_road 模块的 Image / mmcv 两个名字：Image.open 对命中项返回一个只实现 resize/crop/rotate/transpose/size/__array__ 的占位对象，mmcv.imnormalize 对 float32 输入直通",
+        "constraint_kept": "不改数据集类、不改返回布局、不改帧序、不改任何数值；未命中自动回落到真实管线"
+      }
+    }
+  ],
+  "ceiling_estimate": {
+    "sum_gain_s": [
+      5.7,
+      15.4
+    ],
+    "projected_e2e_s": [
+      83.5,
+      93.2
+    ],
+    "note": "C 的上限由 launch gap 6.6 ms/帧硬约束；A/B/D 为算子与后端收益，互不排斥但需分别验收"
+  },
+  "measured_after_b": {
+    "c_saving_s": 5.0,
+    "b_saving_s": 0.084,
+    "b_note": "splat 在整帧中只占 ~3.3 ms（2 sweep x 1.63 ms），融合空间已被实测封顶；残余大头是 resnet 65 ms、depth 43 ms、head 26 ms",
+    "remaining_headroom_s": "D 实测可再省 37-43 ms/帧 GPU 时间，但被 loader 上限吃掉；GPU 侧已无 E2E 收益"
+  },
+  "bottleneck_2026_11_19": {
+    "finding": "Stage1 评测循环 loader-bound：391 帧 loader 供帧速率 ~190 ms/帧，base GPU 151 ms/帧、TRT 114 ms/帧",
+    "evidence": "schedule-probe: base 环内 67.42 s + gap 5.85 s；TRT 环内 51.98 s + gap 23.00 s；两者 eval 均 ~75-77 s",
+    "implication": "任何 GPU 侧加速（D/E 及其余算子优化）在本评测协议下都不会改变 E2E；下一步若仍要提速，必须处理数据装载（不改评测口径，只改喂数方式）",
+    "resolved_by": "v7.6 (I) img_precache：比对 img 前 20 帧 base 7.086 s vs 6.312 s，391 帧 base 73.12 s vs 59.77 s，加载不再压住 GPU"
+  },
+  "measured_after_ip": {
+    "date": "2026-11-19",
+    "loader_ms_per_frame": "~20（4 workers, 12 slots = 6 unique 图 x 2 sweep，全部命中 memmap）",
+    "gpu_bound_arms_ms_per_frame_fwd_ev": {
+      "base": 134.4,
+      "precache_graph": 125.8,
+      "precache_trt": 98.5,
+      "precache_trt_graph": 91.0
+    },
+    "e2e_391_s": {
+      "base": 96.98,
+      "precache": 83.28,
+      "precache_graph": 79.62,
+      "precache_trt": 69.12,
+      "precache_trt_graph": 66.57
+    },
+    "vs_v5_6": "66.57 s vs v5.6 98.939 s = -32.7%；同会话配对 -30.4 s",
+    "next_lever": "GPU 侧剩余 91 ms/帧（fwd_ev）：depth 43、head 26、resnet 34；v7.5 双流在利用率中位 86% 下仍不划算"
+  },
+  "not_in_scope": [
+    "INT8 PTQ/QAT（PTQAT: BEVDepth4D INT8 -2.8 mAP / -1.9 NDS；QD-BEV: 朴素量化不可容忍退化）",
+    "通道剪枝 / 换主干（改权重）",
+    "401x768 类再降采样（v6.0 已判死：coarse +0.0383 m）",
+    "torch.compile/inductor（torch 1.13 无 dynamo，且无 triton）",
+    "conv-BN 归并（改权重值）"
+  ],
+  "probe_results": {
+    "date": "2026-11-19",
+    "gpu": "RTX 4090D",
+    "steady_state_gpu_util": {
+      "samples": 42,
+      "mean_pct": 77.3,
+      "median_pct": 86,
+      "p90_pct": 96,
+      "pct_samples_ge80": 81
+    },
+    "launch_gap_ms_per_frame": 6.6,
+    "basis": "391 帧口径：eval 190.6 ms/帧 - 逐模块 GPU 合计 184 ms/帧",
+    "conclusion": "GPU 基本饱和：v7.3 上限约 2.6 s（实际按 1-2 s 估）；v7.5 仅在利用率<85% 时启动，实测中位 86%，判定为低优先（暂缓）"
+  },
+  "order_2026_11_19": "A 关闭后按收益/风险重排：C -> B -> D -> I(v7.6 loader)。C 通过（-5.0 s），B 通过（-0.08 s），D 单独无收益（loader-bound）-> 触发 v7.6 图像预缓存（-13.4 s，位级一致），loader 解绑后 D 反转为最大单点收益（-14.4 s），C 再 -2.3 s，三者合并 66.3 s（配对 -30.4 s）。v7.5 (E) 在利用率中位 86% 下仍暂缓",
+  "wrote_at_v7_6": "2026-11-19T16:10:00",
+  "successor": "bench_opt/goal/method_version/v8/meta.json（v8.1-v8.5：DepthNet-TRT / Head-TRT / uint8 缓存 / Stage2 / FP16，均占位未启动）"
+}

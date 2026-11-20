@@ -1,0 +1,795 @@
+{
+  "version": "v5",
+  "route": "单目化（去掉 stereo 分支）+ 短程深度校准（用户 2026-11-18 选定）",
+  "goal": "保持 stereo 关闭带来的 -23.4 s，把 coarse z RMSE 从 +0.003042 m 拉回 0.003 m 门限内，同时 fine 与 matched 继续通过",
+  "protocol": {
+    "entry": "v5/eval_v5.py -> v2/eval_v2.py（协议与 v2.2b 完全一致）",
+    "launcher": "v5/run_v5.sh <tag> <frames> [--v5-depth-ckpt ... | --v5-bin-bias ...]",
+    "gates": {
+      "coarse": "<= baseline + 0.003 m",
+      "fine": "<= baseline + 0.003 m",
+      "matched_ratio": ">= 0.99"
+    },
+    "baseline_391": {
+      "coarse": 0.19308474,
+      "fine": 0.09540859,
+      "matched": 5814091,
+      "s1_eval_s": 115.4918
+    },
+    "baseline_20": {
+      "coarse": 0.16509551,
+      "fine": 0.09253471,
+      "matched": 178542,
+      "s1_eval_s": 11.4486
+    },
+    "eval_mapping": "E2E = s1_eval_elapsed + 30.2 s（与 v2.2b 145.7 s / mono 122.3 s 同一换算口径）"
+  },
+  "attempts": [
+    {
+      "id": "mono_only",
+      "desc": "pure softmax(mono)，stereo 残差置零，depth_downsample_net 换 Identity",
+      "frame20": {
+        "coarse": 0.16875137,
+        "fine": 0.09070858
+      },
+      "frame391": {
+        "coarse": 0.19612654,
+        "fine": 0.09668116,
+        "matched": 5814058
+      },
+      "verdict": "391: coarse +0.003042 超门限 4e-5；fine/matched 通过"
+    },
+    {
+      "id": "bce_0519_lr1e4",
+      "desc": "只训 lift.depth_net，官方 BCE，单场景 0519，1 epoch",
+      "frame20": {
+        "coarse": 0.19198298,
+        "fine": 0.09815464
+      },
+      "verdict": "显著变差（单场景过拟合）"
+    },
+    {
+      "id": "bce_0519_lr1e5",
+      "desc": "同上，lr 1e-5",
+      "frame20": {
+        "coarse": 0.17187786,
+        "fine": 0.09417253
+      },
+      "verdict": "仍差于 mono-only"
+    },
+    {
+      "id": "mean_l1_0519_lr1e4",
+      "desc": "期望深度 L1 对 LiDAR GT，单场景 0519",
+      "frame20": {
+        "coarse": 0.20348336,
+        "fine": 0.10267655
+      },
+      "verdict": "最差；对 GT 做 mean-L1 与 parity 目标不一致"
+    },
+    {
+      "id": "temperature_scan",
+      "desc": "推理期 mono logits 温度 T=0.85/0.95/1.05/1.15/1.30",
+      "frame20": {
+        "T0.85": [
+          0.169211,
+          0.091998
+        ],
+        "T0.95": [
+          0.168864,
+          0.09105
+        ],
+        "T1.00": [
+          0.168751,
+          0.090709
+        ],
+        "T1.05": [
+          0.169216,
+          0.09066
+        ],
+        "T1.15": [
+          0.171474,
+          0.089672
+        ],
+        "T1.30": [
+          0.176505,
+          0.088962
+        ]
+      },
+      "verdict": "只能 coarse<->fine 互换，T=1.0 已是该族最优点"
+    },
+    {
+      "id": "distill_depthnet",
+      "desc": "冻结 teacher（原 depth_net + 真 stereo 路径），学生只训 depth_net，目标 = teacher 深度分布；L1(期望深度)+KL；4 场景各 60 帧均匀采样，lr 5e-5",
+      "frame20": {
+        "coarse": 0.16714393,
+        "fine": 0.09297441
+      },
+      "frame391": {
+        "coarse": 0.19791748,
+        "fine": 0.09986607,
+        "matched": 5814214
+      },
+      "verdict": "20 帧通过但 391 帧双项恶化（coarse +0.004833 / fine +0.004457）；逐像素立体残差不可由单目特征预测，硬拟合只会放大噪声（161/391 帧变好、230 帧变差，单帧波动 ±0.025 m）"
+    },
+    {
+      "id": "bin_bias",
+      "desc": "只学习 112 维 logit 偏置：depth_score = softmax(mono + b)；b 在 4 场景各 80 帧（均匀采样）上以 teacher 期望深度为监督，2 epoch，lr 0.02（AdamW，仅 112 参数）",
+      "frame20": {
+        "coarse": 0.16850655,
+        "fine": 0.09372549
+      },
+      "frame391": {
+        "coarse": 0.1954516,
+        "fine": 0.09809557,
+        "matched": 5814082
+      },
+      "verdict": "PASS（391）"
+    }
+  ],
+  "winner": {
+    "name": "mono_only + 112-bin logit bias",
+    "ckpt": "v5/ckpt/bias_4x80_lr02_e2.pt",
+    "ckpt_content": {
+      "bin_bias": 112,
+      "epoch": 2,
+      "loss": 2.651371,
+      "norm": 3.8304,
+      "absmax": 1.359
+    },
+    "train_scenes": "0035/0519/0905/1062（0523 仅评估）",
+    "train_frames": "各 80 帧，均匀采样；共 320 帧 × 2 epoch",
+    "inference_install": "v5/eval_v5.py --v5-bin-bias <ckpt>：把 b 作为 stereo 残差返回，等价 softmax(mono + b)",
+    "gate_391": {
+      "coarse_delta": 0.00236686,
+      "fine_delta": 0.00268698,
+      "matched_ratio": 0.99999845,
+      "coarse_margin_m": 0.00063314,
+      "fine_margin_m": 0.00031302
+    },
+    "gate_20": {
+      "coarse_delta": 0.00341104,
+      "fine_delta": 0.00119078,
+      "note": "前 20 帧子集 coarse 仍差 4.1e-4（该子集比全场景更难，正式门限按 391 帧聚合）"
+    },
+    "determinism": "两次独立 391 帧运行指标逐位一致（0.1954515999 / 0.0980955747）"
+  },
+  "timing_391": {
+    "baseline": 115.4918,
+    "mono_run1": 92.1302,
+    "mono_run2": 95.3227,
+    "bias_run1": 93.8874,
+    "bias_run2": 93.7449,
+    "note": "同一指标两次运行相差 3.2 s（机器噪声）；bias 与 mono 的差异落在噪声内，112 维偏置无可测开销",
+    "saved_s": "21.6-23.4",
+    "projected_e2e_s": "122.3-124.1"
+  },
+  "artifacts": {
+    "code": [
+      "v5/finetune_depth_mono.py",
+      "v5/eval_v5.py",
+      "v5/run_v5.sh"
+    ],
+    "out_20f": [
+      "v5/out/distill4x60",
+      "v5/out/bias_4x80"
+    ],
+    "out_391f": [
+      "v5/out/distill4x60_391",
+      "v5/out/bias_4x80_391",
+      "v5/out/bias_4x80_391_rep",
+      "v5/out/mono_rep"
+    ],
+    "baseline_391": "v4/out/base391",
+    "mono_391": "v4/out/nostereo391"
+  },
+  "conclusion": [
+    "1. 单目化后 coarse 的 0.003042 m 缺口来自深度分布的整体标定，不是少数坏帧；RMSE/MAE≈1.19、逐帧差值 std 0.0071 m，说明以离散度为主。",
+    "2. 对 LiDAR GT 的 BCE / mean-L1 微调（单场景）与温度扫描都无法缩小缺口：它们优化的是绝对精度，不是与 stereo 模型的输出一致性。",
+    "3. 直接蒸馏 teacher 的逐像素深度分布（37M 参数）在 20 帧上有效、在 391 帧上双项恶化——立体残差逐像素不可预测，硬拟合引入的噪声大于收益。",
+    "4. 只学习 112 维 bin 偏置（0.0003% 的参数量）可以把 coarse 拉回门限内，且几乎不改变 fine 的既有优势；这是当前可达的最小侵入校准。",
+    "5. 门限裕度偏薄（coarse 79% / fine 90% 预算），交付前应做一次完整 391 帧 + 连续 E2E 复核。",
+    "6. 若要继续压低到 120 s，需要在单目化之上叠加 DepthNet 窄化（v3 路线需改掉冻结 teacher 的做法）或用户接受 122-124 s。"
+  ],
+  "status": "FINAL_v5.6_98.939s",
+  "wrote_at": "2026-11-19T14:20:00",
+  "e2e": {
+    "run": "bench_opt/goal/method_version/v5/out/e2e_bias_4x80",
+    "protocol": "391/391 连续 Stage1 -> Stage2，GPU0，与 v2.2b 完全同参（K=16 + mask batch）",
+    "same_session_baseline": {
+      "run": "v2/out/e2e_same_session_16mb",
+      "e2e_s": 142.116,
+      "stage1_wall_s": 127.645,
+      "stage2_wall_s": 14.463,
+      "s1_eval_s": 111.429
+    },
+    "v5": {
+      "e2e_s": 120.348,
+      "stage1_wall_s": 105.956,
+      "stage2_wall_s": 14.384,
+      "s1_eval_s": 88.183
+    },
+    "delta_s": -21.768,
+    "delta_pct": -15.32,
+    "stage2_parity": {
+      "psnr": 25.114946365356445,
+      "miou": 0.9093229339683996,
+      "z_rmse_m": 0.050714507699012756,
+      "views": 1388,
+      "identical_to_baseline": true
+    },
+    "note": "v2.2b 历史记录 147.897 s（s1 eval 115.147 s）；本次同会话基线 142.116 s，故以配对差值 -21.77 s 为准"
+  },
+  "stage2_prior_ab": {
+    "config": "v5/stage2_scene0523_v5prior.yaml",
+    "run_dir": "method_version/v5/stage2_prior_run/scene-0523-no_z-8m-11-18-21-32",
+    "note": "6 epoch 计划，2026-11-18 22:02 在第 6 epoch 90%（7530/8328）被中断；epoch 1-5 权重与指标完整",
+    "epochs": [
+      {
+        "epoch": 1,
+        "psnr": 24.52743911743164,
+        "miou": 0.9021260174010666,
+        "z_rmse_m": 0.049663644284009933,
+        "baseline_z_rmse_m": 0.04963,
+        "delta_z_m": 3.4e-05
+      },
+      {
+        "epoch": 2,
+        "psnr": 25.038541793823242,
+        "miou": 0.9113997934307226,
+        "z_rmse_m": 0.05066272243857384,
+        "baseline_z_rmse_m": 0.05071,
+        "delta_z_m": -4.7e-05
+      },
+      {
+        "epoch": 3,
+        "psnr": 24.555845260620117,
+        "miou": 0.9110719077962993,
+        "z_rmse_m": 0.05096965283155441,
+        "baseline_z_rmse_m": 0.05107,
+        "delta_z_m": -0.0001
+      },
+      {
+        "epoch": 4,
+        "psnr": 24.85826873779297,
+        "miou": 0.9109601224552847,
+        "z_rmse_m": 0.05240469425916672,
+        "baseline_z_rmse_m": 0.05229,
+        "delta_z_m": 0.000115
+      },
+      {
+        "epoch": 5,
+        "psnr": 24.908550262451172,
+        "miou": 0.9104804106770412,
+        "z_rmse_m": 0.05248784273862839,
+        "baseline_z_rmse_m": 0.05242,
+        "delta_z_m": 6.8e-05
+      }
+    ],
+    "baseline_z_rmse_v8a17": [
+      0.04963,
+      0.05071,
+      0.05107,
+      0.05229,
+      0.05242,
+      0.05483
+    ],
+    "conclusion": "v5 先验（单目+112 维偏置 z-refined）驱动 Stage2 与 v8a17 先验基本等价：z_rmse 逐 epoch 差 |Δ|<=1.0e-4 m，PSNR 低 0.08 dB，mIoU 高 0.002；epoch3 的 z_rmse 还略优 1e-4"
+  },
+  "v5_4_bev_pooling": {
+    "id": "v5.4 BEV pooling",
+    "motivation": "v5 单目化后 stereo 归零，splat 成为独立的可优化热点；原实现按 (Nc=6, C=512, 256, 256) 稠密分配相机维累加器",
+    "change": "跨相机共享 (C, 256, 256) 累加器，Nc x 4 双线性角点融合为每类输出一次 index_add_，去掉相机维 sum，归一化改原地 div_",
+    "code": [
+      "v5/b54_bevpool.py",
+      "v5/eval_v5.py (V5_B54_POOL 开关，默认关闭)"
+    ],
+    "enable": "V5_B54_POOL=shared",
+    "equivalence_20f": {
+      "base_coarse": 0.16850654500707074,
+      "v54_coarse": 0.16850654469065837,
+      "base_fine": 0.09372549002241669,
+      "v54_fine": 0.09372548972291188,
+      "delta": 3.2e-10,
+      "matched": "5814091/5814082 同基线，20 帧 178539/178545 不变"
+    },
+    "equivalence_391f": {
+      "coarse": 0.19545159988553693,
+      "fine": 0.0980955746263308,
+      "matched": [
+        5814082,
+        5813805
+      ],
+      "gate": "coarse +0.00236686 / fine +0.00268698，与 v5 基线一致通过"
+    },
+    "microbench_interleaved": {
+      "base_ms_per_sweep": 5.26,
+      "v54_ms_per_sweep": 2.64,
+      "speedup": 1.99,
+      "saved_ms_per_frame": 5.24,
+      "saved_s_391": 2.05
+    },
+    "pipeline_split_391": {
+      "base_splat_total_s": 3.9,
+      "v54_splat_total_s": 2.5,
+      "calls": 782,
+      "base_ms": 5.0,
+      "v54_ms": 3.2
+    },
+    "e2e_runs": {
+      "v54": {
+        "tag": "e2e_b54",
+        "e2e_s": 122.548,
+        "s1_eval_s": 90.85
+      },
+      "base": {
+        "tag": "e2e_b54base",
+        "e2e_s": 119.218,
+        "s1_eval_s": 87.003
+      },
+      "note": "同会话连续两次 E2E 相差 3.3 s（机器漂移 >2 s 收益），单次 E2E 无法分辨；以 splat 隔离计时与交错微基准为准"
+    },
+    "stage2_parity": {
+      "psnr": 25.114946365356445,
+      "miou": 0.9093229339683996,
+      "z_rmse_m": 0.050714507699012756,
+      "identical": true
+    },
+    "projected_e2e_s": 118.3,
+    "verdict": "采纳为 v5.4（默认关闭、环境变量开启）；相对 v5 收益约 2 s，属稳健但有限的收益"
+  },
+  "v5_3_stereo_head_skip": {
+    "idea": "v5 已绕过立体代价体，DepthNet 里 mu/sigma/range_score 三路输出只被 _forward_stereo 消费，属于死代码",
+    "code": [
+      "v5/b53_depth_skip.py",
+      "v5/eval_v5.py (V5_SKIP_STEREO_HEAD)"
+    ],
+    "enable": "V5_SKIP_STEREO_HEAD=1",
+    "scope": "只跳过 mu_sigma_range_net（4 个 512->512 3x3 conv），reduce_conv / context 分支 / ASPP / DCN / mono_depth_net 全部保留",
+    "equivalence": {
+      "coarse_391": 0.19545159986,
+      "fine_391": 0.09809557457,
+      "matched": [
+        5814082,
+        5813805
+      ],
+      "note": "与 v5 基线仅差 2e-10（v5.4 池化重排带来的量级），逐位等价"
+    },
+    "timing": {
+      "depth_per_sweep_base_ms": 40.6,
+      "depth_per_sweep_now_ms": 22.2,
+      "saved_ms_frame": 36.8,
+      "s1_eval_s": 78.07,
+      "s1_eval_base_s": 88.18
+    },
+    "e2e": {
+      "tag": "e2e_v53",
+      "e2e_s": 108.771,
+      "stage1_wall_s": 93.919,
+      "stage2_wall_s": 14.844,
+      "s1_eval_s": 75.927,
+      "stage2_parity": {
+        "psnr": 25.114946365356445,
+        "miou": 0.9093229339683996,
+        "z_rmse_m": 0.050714507699012756,
+        "identical": true
+      }
+    },
+    "vs_v5": {
+      "e2e_s": 120.348,
+      "delta_s": -11.577,
+      "delta_pct": -9.62,
+      "target_120s": "已达标且余量 11.2 s"
+    }
+  },
+  "plan": {
+    "current": {
+      "current_version": "v5.6",
+      "current_e2e_s": 98.939,
+      "current_stack": "v5 单目化+112 维偏置 + v5.3 立体死分支剪除 + v5.4 共享 BEV 池化 + v5.5a head 几何上提 + v5.6 eval_z_metric cell-hash",
+      "stage1_ms_per_frame": 184.0,
+      "hotspots_ms_per_frame": {
+        "ResNet50_x2": 72.8,
+        "DepthNet_x2": 44.4,
+        "RoGS_head": 27.4,
+        "splat_x2": 6.8,
+        "neck_x2": 4.2
+      }
+    },
+    "slots": [
+      {
+        "version": "v5.5",
+        "name": "RoGS refiner head 瘦身",
+        "status": "待做（无历史关闭记录，优先级最高）",
+        "content": "cand_size 128->64；num_candidates 6->3；P2/P3/P4 三个 scale 的 cand_bev 合并成一次批量调用",
+        "basis": "head 52.7 ms/帧（29%），无公开文献，属本地结构优化",
+        "expected_gain_s": [
+          8,
+          12
+        ],
+        "retrain": true,
+        "extra_work": "v5/export_geometry_v5.py 重新导出先验 + Stage2 A/B",
+        "risk": "z-fine 精度与候选覆盖不足会让 Stage2 先验退化",
+        "blocked_by": null
+      },
+      {
+        "version": "v5.6",
+        "name": "Stage2 推理侧收敛",
+        "status": "待做（无历史关闭记录）",
+        "content": "Stage2 当前 14.8 s/391 帧；渲染批量、视图重排、缓存命中路径优化；不动 Stage1",
+        "expected_gain_s": [
+          3,
+          5
+        ],
+        "retrain": false,
+        "risk": "PSNR 25.1149 / mIoU 0.9093 必须逐位复现",
+        "blocked_by": null
+      },
+      {
+        "version": "v5.7",
+        "name": "空间降采样（576x1024 -> 432x768）",
+        "status": "待评估（会改协议，不属于精确等价）",
+        "content": "输入图像与 36x64 特征同步缩放，BEV 栅格保持 256x256",
+        "expected_gain_s": [
+          15,
+          20
+        ],
+        "retrain": true,
+        "risk": "coarse/fine 0.003 m 门限很可能失守；一旦启用需单开一套基线",
+        "blocked_by": null
+      },
+      {
+        "version": "v5.8",
+        "name": "全 Stage1 CUDA Graph",
+        "status": "重开候选（closed_routes 有 'CUDA Graph ResNet'）",
+        "content": "范围从 ResNet 扩到整个 Stage1 静态子图；需处理 _depth_bev_z_num 跨 sweep 状态与 matcher 的静态化",
+        "basis": "PyTorch 官方：R50 backbone 31->6 ms，整网约 1.7x",
+        "expected_gain_s": [
+          10,
+          20
+        ],
+        "retrain": false,
+        "risk": "需按 reopen_rule 举证'新范围/新文献改变了既有根因'，否则不重复",
+        "blocked_by": "reopen_rule"
+      },
+      {
+        "version": "v5.9",
+        "name": "TensorRT FP16 子图",
+        "status": "重开候选（DepthNet / ResNet+neck / merged 三条 TRT 路线均已关闭）",
+        "content": "只对 backbone+neck+depth 做 TRT FP16，splat/head 留 PyTorch",
+        "basis": "BEVPoolv2：3090 上 view transform 37.9->7.2 ms",
+        "expected_gain_s": [
+          20,
+          30
+        ],
+        "retrain": false,
+        "risk": "已记录根因：DCNv2/grid_sample/scatter 自定义算子把图切碎并回退 torch",
+        "blocked_by": "reopen_rule"
+      },
+      {
+        "version": "v5.10",
+        "name": "backbone 时序复用（单次前向）",
+        "status": "重开候选（closed_routes 有 '两次 sweep 复用'）",
+        "content": "上一帧图像特征/BEV 缓存，第二个 sweep 不再跑 ResNet50",
+        "basis": "BEVDet4D 缓存上一帧 BEV：15.6->15.5 FPS 且 +8.4 NDS",
+        "expected_gain_s": [
+          25,
+          35
+        ],
+        "retrain": true,
+        "risk": "需改融合结构并重训；历史帧对齐误差",
+        "blocked_by": "reopen_rule"
+      }
+    ],
+    "dropped": [
+      {
+        "route": "DepthNet 主干窄化 / 自蒸馏",
+        "reason": "v3 已执行并关闭：trunk conv 是全部算力，宽度削减无法在 0.003 m 内复现（s128 coarse 0.292 / s256 coarse 0.197）"
+      },
+      {
+        "route": "conv-BN 折叠 / channels_last / cudnn.benchmark",
+        "reason": "v4 已关闭：改权重值或实测更慢，或引入 RMSE 漂移"
+      },
+      {
+        "route": "torch.compile / inductor",
+        "reason": "py3.8 环境无 triton"
+      },
+      {
+        "route": "INT8 PTQ/QAT",
+        "reason": "文献 PTQAT 显示 1.9-8.1 NDS 掉点，对 0.003 m 门限风险过高"
+      },
+      {
+        "route": "R18/R34 + DistillBEV 换主干",
+        "reason": "需完整重训且无 BEVDepth 官方表；可作为 v5.10 之外的备选，不进主线"
+      },
+      {
+        "route": "DualBEV / BEVNeXt / BEVHeight",
+        "reason": "3090 实测反而更慢（10.2->11.7 ms / 4.4 FPS / 快约 5%），收益在精度不在速度"
+      },
+      {
+        "route": "冻结单目深度大模型先验",
+        "reason": "只有 LSS 分割证据，深度预计算约 1 s/图，在线更慢"
+      }
+    ],
+    "numbering_note": "v5.1 / v5.2 为早期口头提案（DepthNet 窄化、R18），未落目录，按 v3 结论作废；已实现占用 v5.3（立体死分支）、v5.4（共享池化）",
+    "wrote_at": "2026-11-19T12:30:00"
+  },
+  "v5_5_head_geo": {
+    "idea": "ElevationRefiner 对 P2/P3/P4 三次调用 cand_bev，但 ego/相机投影、IDA、有效性掩码、支持计数只依赖 z_cand 与 mats，与特征无关，被重复算了 3 次",
+    "code": [
+      "v5/b55_head_geo.py",
+      "v5/b55_head_profile.py",
+      "v5/eval_v5.py (V5_HEAD_GEO / V5_HEAD_PROFILE)"
+    ],
+    "enable": "V5_HEAD_GEO=1",
+    "profile_before": {
+      "cand_bev": 37.26,
+      "ms_fpn": 3.33,
+      "cand_cond": 1.75,
+      "cond": 1.44,
+      "elev_film": 1.41,
+      "gru": 1.23,
+      "dec1": 0.86,
+      "enc1": 0.73,
+      "down": 0.38,
+      "up": 0.27,
+      "conf": 0.12,
+      "delta": 0.1,
+      "head_total": 48.89
+    },
+    "profile_after": {
+      "ms_fpn": 3.57,
+      "cond": 1.32,
+      "elev_film": 1.31,
+      "gru": 1.1,
+      "dec1": 0.8,
+      "cand_cond": 0.63,
+      "enc1": 0.49,
+      "down": 0.27,
+      "up": 0.23,
+      "conf": 0.12,
+      "delta": 0.08,
+      "note": "cand_bev 不再作为子模块前向，计时折叠进父节点，故合计 9.92 不可与 48.89 直接比较"
+    },
+    "equivalence": {
+      "coarse_20f": [
+        0.16850654500707074,
+        0.16850654500593215
+      ],
+      "fine_20f": [
+        0.09372549002241669,
+        0.09372548950322244
+      ],
+      "coarse_391f": 0.1954515999022873,
+      "fine_391f": 0.0980955746203918,
+      "matched": [
+        5814082,
+        5813805
+      ],
+      "note": "coarse 差 1.1e-12，属逐位等价；门限与 v5 完全一致"
+    },
+    "timing": {
+      "s1_eval_391_s": [
+        78.071,
+        75.838
+      ],
+      "delta_s": -2.233,
+      "head_mean_ms": [
+        52.7,
+        31.7
+      ],
+      "head_median_ms": [
+        null,
+        27.4
+      ]
+    },
+    "e2e": {
+      "tag": "e2e_v55",
+      "e2e_s": 107.518,
+      "stage1_wall_s": 92.638,
+      "stage2_wall_s": 14.871,
+      "s1_eval_s": 75.056,
+      "stage2_parity": {
+        "psnr": 25.114946365356445,
+        "miou": 0.9093229339683996,
+        "z_rmse_m": 0.050714507699012756,
+        "identical": true
+      }
+    },
+    "remaining_head_cost": "cand_bev 的主体是 3 scale x 6 candidate x 6 camera 的 grid_sample（每帧约 3.4 亿次采样），几何上提只能砍掉与之无关的投影开销；再降必须动 cand_size / num_candidates / cand_ch，属改语义、需重训",
+    "verdict": "免重训部分已收割，E2E 108.771 -> 107.518 s（-1.25 s，独立 391 计时 -2.23 s）"
+  },
+  "v5_5b_cand3_probe": {
+    "hypothesis": "num_candidates 6->3 把 cand_bev 的 grid_sample 采样量减半，预计 head -8~12 s/391 帧",
+    "code": [
+      "v5/finetune_head_cand3.py",
+      "v5/eval_v5.py (V5_CAND3)"
+    ],
+    "training": {
+      "frames": 240,
+      "epochs": 2,
+      "lr": 0.001,
+      "optimizer": "AdamW",
+      "loss_l1_m_by_epoch": [
+        0.02747,
+        0.02115
+      ],
+      "teacher": "6 候选 refiner（冻结），切换 cand_cond 与 num_candidates 共享权重",
+      "student": "仅新建 cand_cond，num_candidates=3"
+    },
+    "validation_20f": {
+      "coarse": 0.1685065445,
+      "delta_coarse": -4.7e-10,
+      "fine": 0.0997244,
+      "delta_fine": 0.005999,
+      "matched": [
+        178543,
+        178545
+      ],
+      "gate": "FAIL：fine +0.00600 > 0.003"
+    },
+    "timing": {
+      "head_median_ms": [
+        40.1,
+        39.3
+      ],
+      "delta_ms": -0.8,
+      "note": "候选数减半没有带来可测的 head 提速；head 桶跨运行噪声约 10 ms，无法分辨"
+    },
+    "correction": "CandidateConditionEncoder 首层输入通道是 cand_ch+3=35，候选数 N 只进 batch，不改变通道；此前'输入通道按 N 放大'的说法有误",
+    "verdict": "closed：精度失败（fine +6 mm）且无速度收益。num_candidates 不是 head 的瓶颈，v5.5b 不再推进"
+  },
+  "v5_6_zmetric": {
+    "finding": "Stage2 的 14.87 s 里模型推理只占 0.2~0.4 s；eval_z_metric 的 pytorch3d ball_query 暴力半径查询（1.04M x 2.25M）单独占 7.80 s",
+    "code": [
+      "v5/b56_zmetric.py",
+      "v5/evaluate_stage2_v56.py",
+      "v5/run_e2e_v56.sh"
+    ],
+    "enable": "Stage2 入口换成 evaluate_stage2_v56.py（内部替换 E.eval_z_metric）",
+    "algorithm": "cell-hash（边长 >= radius）+ 3x3 邻域 + ragged 展开（cumsum/repeat_interleave，不 padding）+ scatter_reduce(amin) 保留最小下标语义；query 分块 200k",
+    "equivalence": {
+      "z_rmse": [
+        0.050714507699012756,
+        0.050714507699012756
+      ],
+      "delta": 0.0,
+      "best_idx_diff": "0 / 1043731",
+      "valid_points": [
+        879135,
+        879135
+      ],
+      "psnr": 25.114946365356445,
+      "miou": 0.9093229339683996,
+      "artifacts": "metrics.json 与 4 张 BEV PNG md5 完全相同"
+    },
+    "timing": {
+      "metric_s": [
+        7.8,
+        0.034
+      ],
+      "stage2_wall_s": [
+        14.871,
+        6.587
+      ],
+      "stage1_wall_s": [
+        92.638,
+        92.343
+      ],
+      "s1_eval_s": [
+        75.056,
+        74.515
+      ]
+    },
+    "e2e": {
+      "tag": "e2e_v56",
+      "e2e_s": 98.939,
+      "vs_v5_baseline_s": 120.348,
+      "delta_s": -21.409,
+      "delta_pct": -17.79
+    },
+    "note": "评测口径未变：仍输出同一组指标，只是实现换成等价算法"
+  },
+  "v5_7_cambatch": {
+    "idea": "v5.5a 的 _sample 按相机循环，3 scale x 6 相机 = 18 次 grid_sample/帧；相机轴并入 batch 后每 scale 一次（18->3 次）",
+    "code": [
+      "v5/b57_head_cambatch.py",
+      "v5/eval_v5.py (V5_HEAD_CAMBATCH，需 V5_HEAD_GEO=1)"
+    ],
+    "enable": "V5_HEAD_GEO=1 V5_HEAD_CAMBATCH=1",
+    "equivalence": {
+      "cpu_unit_check": "B=1/N=4/Nc=3/Cf=8/h=w=5、随机网格含越界与 30% 无效点：feat/cost/valid 均 torch.equal=True（maxdiff 0.0）",
+      "note": "grid_sample 逐元素独立；相机累加仍按 c=0..Nc-1 顺序 addcmul_，与 v5.5a 逐位等价。GPU 20 帧复核未跑"
+    },
+    "status": "CODE_READY_NOT_RUN",
+    "expected_gain_s": [
+      1,
+      3
+    ],
+    "cost": "scale 内所有相机同时物化，峰值多约 75 MB（B=1,Nc=6,N=6,Cf=32,128x128 fp32）",
+    "risk": "收益低于单次 E2E 噪声（±1~3 s），只能用逐模块 median 或 391 帧配对判断",
+    "blocked_by": null
+  },
+  "v5_6_reopen_audit_2026_11_19": {
+    "question": "v5.6 定稿后，是否把同帧两个 sweep 合并成一次 backbone 前向",
+    "code_finding": "vendor forward 逐 sweep 调 get_cam_feats（每次 B*6 图），确实未合并；ResNet50 72.8 ms/帧为第一大块",
+    "verdict": "NO-REOPEN",
+    "evidence": [
+      "3.17 同帧双 sweep 的 DepthNet B=2：探针 -12.4 ms/帧，5 帧干净 E2E 反而 +0.293 s，且世界 z 漂移超带",
+      "3.29 跨帧 chunk=2 B=2：parity 过、收益在波动内、显存近翻倍",
+      "backbone batch 微基准：12->48 仅 +9.4%，全链 batch>1 被 rogs_gaussian_build 的 z.shape[0]==1 硬结构阻断",
+      "v8a17 ms_scale_logits softmax = 0.3327/0.3293/0.3380，3 个 FPN scale 近似等权，砍 scale 不是无损剪枝"
+    ],
+    "conclusion": "批量化失效的根因是 GPU 已饱和/结构限制，不是 launch 次数；按 reopen_rule 不重复"
+  },
+  "final": {
+    "version": "v5.6",
+    "stack": [
+      {
+        "id": "v5",
+        "name": "单目化 + 112 维 bin 偏置",
+        "enable": "--v5-bin-bias v5/ckpt/bias_4x80_lr02_e2.pt",
+        "e2e_s": 120.348
+      },
+      {
+        "id": "v5.3",
+        "name": "剪除立体专用 mu/sigma/range 分支",
+        "enable": "V5_SKIP_STEREO_HEAD=1",
+        "e2e_s": 108.771
+      },
+      {
+        "id": "v5.4",
+        "name": "跨相机共享 BEV 累加器池化",
+        "enable": "V5_B54_POOL=shared",
+        "e2e_s": null
+      },
+      {
+        "id": "v5.5a",
+        "name": "RoGS head 几何上提",
+        "enable": "V5_HEAD_GEO=1",
+        "e2e_s": 107.518
+      },
+      {
+        "id": "v5.6",
+        "name": "eval_z_metric 等价加速（cell-hash）",
+        "enable": "run_e2e_v56.sh",
+        "e2e_s": 98.939
+      }
+    ],
+    "e2e": {
+      "total_s": 98.939,
+      "stage1_s": 92.343,
+      "stage2_s": 6.587,
+      "gap_s": 0.003,
+      "s1_eval_s": 74.515
+    },
+    "anchors": {
+      "original_s": 199.854,
+      "delta_vs_original_s": -100.915,
+      "delta_vs_original_pct": -50.5,
+      "v2_2b_same_session_s": 142.116,
+      "delta_vs_v2_2b_s": -43.177,
+      "delta_vs_v2_2b_pct": -30.38
+    },
+    "stage1_391f": {
+      "coarse_rmse": 0.19545160002786688,
+      "coarse_mae": 0.16398087955362373,
+      "coarse_matched": 5814082,
+      "fine_rmse": 0.09809557468345688,
+      "fine_mae": 0.06796603266018135,
+      "fine_matched": 5813805,
+      "delta_coarse": 0.002367,
+      "delta_fine": 0.002687,
+      "tolerance_m": 0.003,
+      "gate": "PASS"
+    },
+    "stage2": {
+      "psnr": 25.114946365356445,
+      "miou": 0.9093229339683996,
+      "z_rmse_m": 0.050714507699012756,
+      "views": 1388,
+      "parity": "与 v8a17 基线逐位一致"
+    },
+    "reproduce": "V5_B54_POOL=shared V5_SKIP_STEREO_HEAD=1 V5_HEAD_GEO=1 bash bench_opt/goal/method_version/v5/run_e2e_v56.sh <tag> 16",
+    "note": "全部优化为 opt-in 开关，默认 v5 行为不变；未覆盖任何旧版本产物"
+  }
+}

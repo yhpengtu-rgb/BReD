@@ -1,0 +1,34 @@
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Native build products
+build/
+dist/
+*.egg-info/
+*.o
+*.so
+*.a
+
+# Machine-specific acceleration binaries (rebuild/provision locally)
+*.engine
+bench_opt/trt_target/
+bench_opt/matcher_ext/build_matcher/
+stage1/matcher_ext/native_*/
+
+# Bundled third-party documentation and patch leftovers
+vendor/**/third_party/glm/doc/
+*.orig
+
+# Runtime assets and outputs
+assets/
+results/
+**/out/
+bench_opt/cache/
+*.log
+
+# IDE and OS files
+.vscode/
+.idea/
+.DS_Store

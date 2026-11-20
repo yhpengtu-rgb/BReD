@@ -1,0 +1,600 @@
+{
+  "version": "v8",
+  "route": "在 v7.6 基线之上继续压 GPU 算术时间（DepthNet / Head / Stage2 / H2D），A-E 之外的下一组占位定版",
+  "basis_version": "v7.6 (I) + v7.4 (D) + v7.3 (C)",
+  "status": "v8.5 (FP16) 通过并成为新基线：391 配对 E2E 59.906 -> 44.83 s（-25%），s1_eval 36.738 -> 23.0 s，精度增量 2e-5 m、matched 一致、Stage2 PSNR 逐位不变。v8.3 通过；v8.1/v8.4 关闭（负结果）；v8.2 暂缓",
+  "wrote_at": "2026-11-19T17:05:00",
+  "updated_at": "2026-11-19T20:05:00",
+  "new_baseline_after_v8_3": {
+    "config": "V7_IMG_PRECACHE=u8 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1",
+    "e2e_wall_s": 62.649,
+    "stage1_wall_s": 55.904,
+    "s1_eval_s": 40.8906,
+    "coarse_Z_RMSE_m": 0.1954535625258211,
+    "fine_Z_RMSE_m": 0.09808106724811919,
+    "matched": [
+      5814094,
+      5813831
+    ],
+    "s2_psnr": 25.114946365356445,
+    "vs_v5_6": "-36.7%（98.939 -> 62.649）"
+  },
+  "goal": "把 391 帧 E2E 从 v7.6 组合的 66.57 s 压到 52-55 s（-17%~-21%），不引入 INT8 / 剪枝 / 再降采样 / 训练 / 权重改动 / 评测协议改动",
+  "baseline_v7_6": {
+    "config": "V7_IMG_PRECACHE=1 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1",
+    "e2e_wall_s": [
+      66.254,
+      66.888
+    ],
+    "e2e_mean_s": 66.571,
+    "stage1_wall_s": 58.718,
+    "s1_eval_s": [
+      43.367,
+      43.949
+    ],
+    "stage2_wall_s": 7.5,
+    "frames": 391,
+    "coarse_Z_RMSE_m": 0.19545356255,
+    "fine_Z_RMSE_m": 0.09808106726,
+    "matched": [
+      5814094,
+      5813831
+    ],
+    "s2_psnr": 25.114946365356445,
+    "vs_v5_6": "-32.7%（98.939 -> 66.571）"
+  },
+  "profile_2026_11_19": {
+    "method": "--split-timing，24 帧，precache+TRT（不叠 graph），逐模块 synchronize 取中位",
+    "fwd_ev_ms_per_frame": 91.0,
+    "body_ms_per_frame": 100.6,
+    "eval_ms_per_frame": 110.9,
+    "modules_ms_per_frame": {
+      "depth_net": 41.2,
+      "resnet50_neck_trt": 32.8,
+      "head": 24.8,
+      "splat": 3.6,
+      "stereo": 0.2,
+      "non_compute": 10.3
+    },
+    "note": "launch 开销已被 v7.3 CUDA Graph 吸收，剩余全部是纯算术；DepthNet 是未上 TRT 的最大一块（41%）"
+  },
+  "protocol": {
+    "entry": "复用 v5/eval_v5.py + v2/eval_v2.py + v7/run_v7.sh；每个 v8.x 只新增 opt-in env 或独立模块，默认关闭",
+    "gates": {
+      "coarse": "<= 0.1984516 m（v5.6 + 0.003）",
+      "fine": "<= 0.10109557 m（v5.6 + 0.003）",
+      "matched_ratio": ">= 0.99",
+      "screen": "20 帧增量 > 0.002 m 即判死，不进 391"
+    },
+    "e2e_acceptance": "391/391 连续 Stage1 + 同会话 Stage2；与同一会话的 v7.6 组合配对比较；E2E 噪声带 ±1~3 s，结论优先用 s1_eval 配对",
+    "hard_never": [
+      "不改任何权重值（含 BN 归并、量化标定）",
+      "不训练/不重标定",
+      "不覆盖 v5.6 / v7.x 任何产物",
+      "不启用 INT8、剪枝、再降采样",
+      "不改评测协议、门限、匹配口径",
+      "不重复已闭环路线"
+    ]
+  },
+  "order_2026_11_19": "v8.3 (L, 无损, 先打底) -> v8.1 (J, 单点最大) -> v8.2 (K) -> v8.4 (M, Stage2) -> v8.5 (N, 待口径决策)。v8.1 与 v8.2 都要新建 TRT 子图，可共用一套 engine 构建/装载脚手架；v8.5 与 v8.1/v8.2 部分重叠，不重复计入收益",
+  "open_decisions": [
+    {
+      "id": "fp16_policy",
+      "question": "TRT 子图是否允许 FP16？",
+      "context": "FP16 是剩余最大的单一杠杆（TRT 段再快 30-40%，约 -4~6 s），但它改变数值：与 v7 系列『真 FP32、TF32 显式关闭』的一贯口径冲突。不在现行禁令字面内（禁的是 INT8 / 剪枝 / 再降采样），但属于评测数值变化，需要明确授权",
+      "status": "已决：2026-11-19 用户授权 FP16（仅 TRT 子图内部内核；I/O 保持 FP32，不做 INT8，不动 BN 统计）",
+      "result": "v8.5 落地并通过，见 slots.v8.5"
+    }
+  ],
+  "slots": [
+    {
+      "version": "v8.1",
+      "id": "J_depthnet_trt",
+      "name": "DepthNet 上 TensorRT（含 DCN 插件）",
+      "mechanism": "把 DepthNet 整段（reduce_conv -> 2xBasicBlock+ASPP -> DCN -> mu_sigma/mono_depth/context 分支）导出静态 shape 的 FP32 TRT 引擎，替换 lift.depth_net；唯一卡点是 depth_feat_conv 尾部那个 mmcv DCN(groups=4)，用 MMCVDeformConv2d 或 TRT OSS ModulatedDeformConv2d 插件承载",
+      "literature": [
+        "mmcv 1.4 TensorRT Deployment：ONNX MMCVDeformConv2d -> TensorRT 插件（mmcv >= 1.3.0）",
+        "mmdeploy 1.3.1 TRT Ops：MMCVModulatedDeformConv2d 自定义算子",
+        "TAO OCDNet：TRT 8.6 环境下按 release/8.6 分支编译 ModulatedDeformConv 插件"
+      ],
+      "expected_gain_s": [
+        3.0,
+        5.0
+      ],
+      "expected_ms_per_frame": [
+        -12,
+        -8
+      ],
+      "risk": "中：需要为本机 TRT 8.6.0 编译第三方插件；DCN 与 head 的 SE/MLP 混合，子图切分要保证 static shape；FP32 累加顺序变化会带来 ~1e-5 级输出差异（v7.4 先例：coarse +1.96e-6 m）",
+      "acceptance": "20 帧 coarse/fine 增量 <= 0.002 m；391 配对 s1_eval 下降 >= 2.5 s；门限全过",
+      "deps": [],
+      "supersedes": "v2 时代已关闭的 --dn-trt-engine（当时只切 pre-DCN trunk，收益可忽略，不是 DCN 的正式解）",
+      "status": "关闭（负结果）：TRT 子图按计划落地并通过精度门限，但 v7.3 CUDA Graph 已吸收 eager 的启动开销，实测 391 配对 s1_eval 只降 0.66 s（门限 2.5 s），判死。DCN 插件路线不再需要",
+      "probe_2026_11_19": {
+        "method": "V8_DN_STUB=1 把 lift.depth_net 换成同 shape 的 zeros（下游只消费形状，stereo 已 bypass），391 帧 A/B",
+        "config": "V7_IMG_PRECACHE=u8 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1",
+        "arms": {
+          "real": {
+            "s1_eval_s": 40.8906,
+            "e2e_wall_s": 62.649
+          },
+          "stub": {
+            "s1_eval_s": 24.7507,
+            "e2e_wall_s": 47.67
+          }
+        },
+        "depthnet_share_s": 16.14,
+        "depthnet_ms_per_frame": 41.3,
+        "cross_check": "与 v7.6 --split-timing 的 depth_net 41.2 ms/帧 完全吻合",
+        "per_block_events": "reduce_conv 63.5% / ASPP 13.0% / bb1 6.8% / bb2 6.8% / mono 6.7% / DCN 2.6%（比例可信，绝对值被管线空泡放大 2.4 倍，reduce_conv 吸收深度网络入口的等待）",
+        "input": "(6, 512, 36, 64) contiguous fp32，2 次/帧；reduce_conv=Conv3x3(512,512)+SyncBN+ReLU",
+        "isolated_microbench": "reduce_conv 单算子 1.63 ms/call（说明块级事件含排队空泡，不能当真值）",
+        "other_facts": {
+          "fwd_ev_steady_ms": 50.9,
+          "match_ms_early_to_late": "51.6 -> 92（评估匹配随 GT 累积变慢）",
+          "frame_total_ms_steady": 54.9,
+          "fwd_host_ms_with_graph": 2.7
+        },
+        "conclusion": "DepthNet 占 s1_eval 的 16.1 s（41 ms/帧，39%）。TRT 若做到 1.7-2.4x，可回收 -6~-9 s，高于原估的 -3~-5 s；DCN 只占 2.6%，可以留 eager 或后置插件"
+      },
+      "closed_at": "2026-11-19",
+      "result_20f": {
+        "config": "V7_IMG_PRECACHE=u8 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1 V5_SKIP_STEREO_HEAD=1，max-frames 20，同会话配对",
+        "base": {
+          "s1_eval_s": 4.614,
+          "coarse": 0.16853435627,
+          "fine": 0.09366803551,
+          "matched": [
+            178541,
+            178546
+          ]
+        },
+        "trt": {
+          "s1_eval_s": 4.186,
+          "coarse": 0.16853435618,
+          "fine": 0.09366803554,
+          "matched": [
+            178541,
+            178546
+          ]
+        },
+        "delta_m": {
+          "coarse": 9e-11,
+          "fine": 3e-11
+        },
+        "note": "20 帧含 ~1.1 s CUDA Graph 捕获且前几帧尚未稳定，差值不可外推（见 391 结果）"
+      },
+      "result_391": {
+        "same_session_arms": {
+          "base": {
+            "e2e_wall_s": 59.906,
+            "stage1_wall_s": 52.857,
+            "s1_eval_s": 36.7384
+          },
+          "trt": {
+            "e2e_wall_s": 57.119,
+            "stage1_wall_s": 51.348,
+            "s1_eval_s": 36.0828
+          },
+          "stub_depthnet": {
+            "e2e_wall_s": 46.877,
+            "stage1_wall_s": 39.833,
+            "s1_eval_s": 24.132
+          }
+        },
+        "paired_delta_s": {
+          "e2e": -2.787,
+          "s1_eval": -0.656,
+          "stage1_wall": -1.509
+        },
+        "accuracy": {
+          "base": {
+            "coarse": 0.195440653438,
+            "fine": 0.098085127988
+          },
+          "trt": {
+            "coarse": 0.195440653422,
+            "fine": 0.098085127921
+          },
+          "matched": [
+            5814099,
+            5813831
+          ],
+          "delta_m": {
+            "coarse": 1.6e-11,
+            "fine": 6.7e-11
+          },
+          "s2_psnr": 25.114946365356445
+        },
+        "gates": {
+          "coarse_ok": true,
+          "fine_ok": true,
+          "matched_ok": true,
+          "acceptance_s1_eval_2p5s": false
+        }
+      },
+      "diagnosis": {
+        "in_chain_fwd_ev_ms_median_60f": {
+          "base_graph": 80.323,
+          "base_no_graph": 80.147,
+          "trt_graph": 80.215,
+          "trt_no_graph": 80.181,
+          "depthnet_stub": 51.078
+        },
+        "depthnet_gpu_per_frame_ms": 29.2,
+        "isolated_micro_ms_per_call": {
+          "predcn_eager": 15.93,
+          "predcn_engine": 9.96,
+          "full_eager": 20.67,
+          "full_engine": 14.7
+        },
+        "in_chain_engine_ms_per_call": 10.05,
+        "conclusion": "引擎在链内确实 10.05 ms/call（与隔离微基准一致），但 in-chain eager DepthNet 只有 29.2 ms/帧而非 probe 的 41.3 ms/帧 —— 原分段测量的绝对值被 host 空泡放大约 1.4~2.4×。v7.3 把启动开销吸收进图之后，TRT 唯一能省的 host 开销已经不存在，剩下的是带宽受限的 3x3 卷积，TRT 没有算术优势",
+        "implication": "v8.2 (head TRT) 同样预期收益≈0（除非 TRT GridSample 内核本身更快，需先做隔离微基准再决定是否投入）；真正的剩余杠杆是 FP16（v8.5，待授权）与 Stage2"
+      },
+      "artifacts": {
+        "module": "bench_opt/goal/method_version/v8/j81_depthnet_trt.py",
+        "opt_in": "V8_DN_TRT=1（默认关；V8_DN_TRT_VERIFY / V8_DN_TRT_PROBE / V8_DN_TRT_REBUILD / V8_DN_TRT_ENGINE）",
+        "engine": "bench_opt/goal/method_version/v8/engine/depthnet_predcn_fp32_notf32.engine（127 MB，ONNX opset11，TF32/FP16/INT8 全部 clear）",
+        "engine_boundary": "reduce_conv -> context{mlp,se,conv} -> depth{mlp,se} -> BasicBlock x2 -> ASPP；DCN/mono 留 eager",
+        "parity": "reduce_feat 3.1e-5 / context 4.6e-3 / aspp_out 4.4e-3（max abs，fp32 累加顺序差异）",
+        "runs": [
+          "e2e_dnbuild2",
+          "e2e_dn20base",
+          "e2e_dn20trt",
+          "e2e_dn391base",
+          "e2e_dn391trt",
+          "e2e_dn391stub",
+          "e2e_dn60sp0",
+          "e2e_dn60sp1",
+          "e2e_dn60sp2",
+          "e2e_dn60ng0",
+          "e2e_dn60ng1",
+          "e2e_dn60pb2"
+        ]
+      }
+    },
+    {
+      "version": "v8.2",
+      "id": "K_head_trt",
+      "name": "ROGS head 上 TensorRT（18 次 grid_sample）",
+      "mechanism": "head 的 3 scale x 6 camera grid_sample + 后续 conv 合成静态 shape 引擎替换；TRT 8.6.1 已有原生 GridSample 算子，不需要自定义插件",
+      "literature": [
+        "TensorRT 8.6.1 Operators：GridSample 原生算子（bilinear/nearest、padding/align_corners 语义）",
+        "TensorRT 10.0.1 release notes：GridSample 相对 9.2 最多 4x 回退 —— 反而说明应锁定 8.6，不要升 TRT",
+        "v7.1 (A) 已证 head 合并 grid_sample 只减 launch 不减算术，因此必须走 TRT 才有算术收益"
+      ],
+      "expected_gain_s": [
+        2.7,
+        4.0
+      ],
+      "expected_ms_per_frame": [
+        -10,
+        -7
+      ],
+      "risk": "中高：head 里还有 V5_HEAD_GEO 的几何拼接与 ball_grid 相关的自定义路径，需要逐段确认可导出；b57 cambatch 已验证等价，可作为导出后的对照基线",
+      "acceptance": "20 帧 coarse/fine 增量 <= 0.002 m；与 v7.1 cambatch 输出逐元素差 <= 1e-5；391 配对 s1_eval 下降 >= 2 s",
+      "deps": [],
+      "status": "暂缓（未启动）：v8.1 已证 TRT 在 CUDA Graph 之后无算术收益；head 的 grid_sample 块按 b57 自己的说明就是 gather/launch 主导，v7.3 已吃掉 launch。TRT GridSample 与 ATen 是同一类 gather 内核，预期 ≈0，但导出面积覆盖 texture_fpn/query/SH/refiner，成本高，等口径决策",
+      "decision_note": "2026-11-19：建议不做；若要继续，先做单层 grid_sample 的 ATen vs TRT 隔离微基准（形状 B*Nc*N, Cf, Hf, Wf / (h,w)），确认内核本身更快再投入"
+    },
+    {
+      "version": "v8.3",
+      "id": "L_uint8_cache_gpu_norm",
+      "name": "图像缓存改 uint8 + GPU LUT 归一化（H2D 从 81 MB 降到 21 MB）",
+      "mechanism": "v7.6 现在每帧把 12x6.75 MB 的 float32 张量拷上 GPU；改存 uint8 后 H2D 只剩 21 MB，归一化用 256 项 LUT 在 GPU 上做（本机已验证 LUT 与 mmcv.imnormalize 逐位相等，只是 numpy 端 gather 太慢，不能放 CPU）",
+      "literature": [
+        "v7.6 实测：非计算开销 10.3 ms/帧，其中 H2D 81 MB 约占 7 ms",
+        "LUT 逐位等价已验证（np.array_equal 全 True），GPU gather 成本 ~0.1 ms"
+      ],
+      "expected_gain_s": [
+        1.5,
+        2.0
+      ],
+      "expected_ms_per_frame": [
+        -5,
+        -4
+      ],
+      "risk": "低：纯数据通路改动，不触碰任何算子；需要把归一化从 worker 挪到评测循环内（模型输入侧），并保证 CUDA Graph 捕获时不引入动态 shape",
+      "acceptance": "20 帧 coarse/fine/matched 与 v7.6 完全一致（逐位）；391 配对 s1_eval 下降 >= 1 s",
+      "deps": [],
+      "status": "通过（opt-in，V7_IMG_PRECACHE=u8）",
+      "result_20f": {
+        "config": "V7_IMG_PRECACHE=1/u8 + V7_TRT_BACKBONE=1 + V7_CUDA_GRAPH=1，16 corr channels",
+        "f32": {
+          "s1_eval_s": 6.12,
+          "coarse": 0.16855225016989667,
+          "fine": 0.09366740026847763,
+          "matched": [
+            178541,
+            178546
+          ]
+        },
+        "u8": {
+          "s1_eval_s": 4.836,
+          "coarse": 0.16855224974010466,
+          "fine": 0.09366740016450069,
+          "matched": [
+            178541,
+            178546
+          ]
+        },
+        "delta_m": {
+          "coarse": 4.3e-10,
+          "fine": 1e-10
+        },
+        "note": "20 帧含 ~1.1 s CUDA Graph 捕获，两臂同含，差值全部来自 loader/H2D"
+      },
+      "result_391": {
+        "same_session_arms": {
+          "f32": {
+            "e2e_wall_s": 67.188,
+            "stage1_wall_s": 59.885,
+            "s1_eval_s": 43.7494
+          },
+          "u8": {
+            "e2e_wall_s": 62.649,
+            "stage1_wall_s": 55.904,
+            "s1_eval_s": 40.8906
+          }
+        },
+        "paired_delta_s": {
+          "e2e": -4.539,
+          "s1_eval": -2.859,
+          "stage1_wall": -3.981
+        },
+        "accuracy": {
+          "u8_coarse": 0.1954535625258211,
+          "u8_fine": 0.09808106724811919,
+          "u8_matched": [
+            5814094,
+            5813831
+          ],
+          "f32_coarse": 0.19545356246851114,
+          "f32_fine": 0.09808106721271334,
+          "f32_matched": [
+            5814094,
+            5813831
+          ],
+          "delta_m": {
+            "coarse": 5.7e-11,
+            "fine": 3.5e-11
+          },
+          "matched_ratio": 1.0,
+          "s2_psnr": 25.114946365356445
+        },
+        "gates": {
+          "coarse_ok": true,
+          "fine_ok": true,
+          "matched_ok": true
+        }
+      },
+      "verdict": "PASS：391 配对 E2E 67.188 -> 62.649 s（-4.54 s），s1_eval 43.749 -> 40.891 s（-2.86 s），精度增量为 1e-11 量级、matched 完全一致。超预期（原估 -1.5~-2.0 s）",
+      "implementation": {
+        "module": "bench_opt/goal/method_version/v7/i76_img_precache.py",
+        "opt_in": "V7_IMG_PRECACHE=u8（f32 仍为 V7_IMG_PRECACHE=1，v7.6 路径不变）",
+        "cache": "assets/cache/v8_img_u8/imgs_u8.dat — 1388 张 576x1024x3 uint8，2.29 GB（f32 为 9.15 GB）",
+        "changes": [
+          "--build-u8 / build_u8 / _render_u8：只存 resize 后的 uint8 帧，归一化移出 worker",
+          "_MmcvShim(passthrough_dtype=uint8) 直通 + _ImageShim(strict=True)：u8 缓存缺图直接报错，不静默回落",
+          "install_gpu_norm()：在 c73 之后包裹 model.forward，imgs.flip(-3).float() 复刻 to_rgb 通道反转，再做 (u-mean)/std；已证与 mmcv.imnormalize 逐位相等",
+          "同时把 bda_mat 转回 float —— 数据集的 bda_mat = sweep_imgs.new_zeros(4,4) 会继承 uint8 图像 dtype（本次唯一踩坑）"
+        ],
+        "constraint_kept": "不改权重、不改评测协议；u8 只影响数据通路，归一化算术等价"
+      }
+    },
+    {
+      "version": "v8.4",
+      "id": "M_stage2_accel",
+      "name": "Stage2 评测加速（7.5 s，占 E2E 11%，从未动过）",
+      "mechanism": "Stage2 走 1388 views 的 cache 数据集 + 网络前向 + 顶点裁剪/marching cubes；先做分段计时，再按段决定批量化 / TRT / 核心循环优化",
+      "literature": [
+        "v7.6 实测 Stage2 稳定 7.5 s，且与 Stage1 并行度无关（串行 gap ~0.03 s）",
+        "v7 系列全部优化都只作用于 Stage1，Stage2 属未开垦部分"
+      ],
+      "expected_gain_s": [
+        3.0,
+        4.0
+      ],
+      "risk": "低-中：这是一个独立的评测器，改动不会影响 Stage1 数值；但需要先确认它的 output 与 v5.6 产物一致（PSNR / mIoU / z_rmse 逐位或同量级）",
+      "acceptance": "Stage2 输出指标与 v5.6 一致；Stage2 wall 从 7.5 s 降到 <= 4.5 s；E2E 配对下降 >= 2.5 s",
+      "deps": [
+        "先做 Stage2 分段计时（新增 v8.4_probe）"
+      ],
+      "status": "关闭（目标不可达）：Stage2 约 5.8-7.0 s 里只有 ~0.9 s 是计算，其余是进程/导入/一次性的 CUDA-cuSOLVER 初始化；4.5 s 目标建立在『Stage2 是计算瓶颈』的假设上，实测不成立",
+      "probe_2026_11_19": {
+        "runs": {
+          "dn391base_s2": "5.76 s",
+          "dn391trt_s2": "7.04 s",
+          "note": "跨臂差 1.3 s 属噪声"
+        },
+        "phases_fresh_process_s": {
+          "import": 2.12,
+          "import_alt": 2.73,
+          "dataset_cache": 0.15,
+          "Road_cold": 2.44,
+          "Road_warm": 0.55,
+          "torch_load_ckpt": 0.03,
+          "render_rgb": 0.06,
+          "render_label": 0.13,
+          "bev_metric": 0.34,
+          "z_metric": 0.05,
+          "total_wall": 6.02
+        },
+        "import_breakdown_s": {
+          "torch": 1.15,
+          "nusc_cached(含 datasets.nusc)": 0.76,
+          "train": 0.13
+        },
+        "Road_cprofile_s": {
+          "Tensor.to x14": 1.04,
+          "OrthographicCamera.__init__": 0.6,
+          "linalg_inv": 0.6,
+          "cut_point_by_pose": 0.26,
+          "cuda_init": 0.11
+        },
+        "conclusion": "冷/热 Road 2.44 vs 0.55 -> 约 1.9 s 是一次性初始化（cuSOLVER 4x4 inv 0.60、CUDA context 0.11、首次分配/拷贝 0.9）；真实计算 dataset 0.15 + render 0.19 + metrics 0.39 + ckpt 0.03 = 0.76 s。已用缓存（DATASET_SOURCE=cache）",
+        "levers_rejected": [
+          "把 4x4 inv 移到 CPU：会改动渲染数值，Stage2 指标必须逐位不变，属协议风险",
+          "Stage2 与 Stage1 并行：改的是 E2E 口径定义，需用户授权",
+          "nusc_cached 懒导入：缓存路径仍要通过 object.__new__(NuscDataset) 拿到类，绕不开 datasets.nusc 的 0.76 s"
+        ]
+      }
+    },
+    {
+      "version": "v8.5",
+      "id": "N_fp16_trt",
+      "name": "TRT 子图 FP16（口径待决，默认关闭）",
+      "mechanism": "两个已存在的 TRT 子图改 FP16 内部内核：ResNet50+neck 引擎、DepthNet pre-DCN 引擎。权重不变（ONNX 从同一 checkpoint 导出），BN 统计与 I/O 仍是 FP32；CUDA Graph 捕获不受影响",
+      "literature": [
+        "TAO Stereo Depth：FP16 TensorRT 2x 提速、精度损失极小",
+        "PTQAT (arXiv 2508.10557)：BEVDepth4D 的 8-bit TRT 部署，但依赖量化标定/训练 —— 属本系列禁令，不可用",
+        "本机 v7.4 先例：TRT 默认放行 TF32 时 neck maxdiff 0.38，显式 clear_flag(TF32) 才是真 FP32 —— FP16 的量级会远大于此"
+      ],
+      "expected_gain_s": [
+        4.0,
+        6.0
+      ],
+      "expected_ms_per_frame": [
+        -15,
+        -10
+      ],
+      "risk": "高（口径）：改变评测数值。与 v7 系列『真 FP32、TF32 显式关闭』直接冲突；且与 v8.1/v8.2 收益重叠，不可叠加计入",
+      "acceptance": "需先获得明确授权；若授权，按 20 帧筛查 -> 391 门限全过才可保留，且台账须单列『精度口径变更』",
+      "deps": [
+        "open_decisions.fp16_policy"
+      ],
+      "status": "通过（opt-in，V8_TRT_FP16=1 + V8_DN_TRT_FP16=1）",
+      "status_note": "上面 v8.1 的结论强化了 FP16 的价值判断：剩余前向是带宽受限（DepthNet 29.2 ms/帧、head 约 20 ms/帧、ResNet 约 27 ms/帧），FP16 是唯一能减半带宽的杠杆，但属数值口径变更，需要明确授权",
+      "authorized": "2026-11-19 用户明确授权 TRT 子图内部使用 FP16（I/O 仍 FLOAT，INT8 仍禁用）",
+      "result_20f": {
+        "config": "V7_IMG_PRECACHE=u8 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1 V5_SKIP_STEREO_HEAD=1，max-frames 20",
+        "base": {
+          "s1_eval_s": 4.908,
+          "coarse": 0.1685522497,
+          "fine": 0.0936674004
+        },
+        "rn_fp16": {
+          "s1_eval_s": 4.507,
+          "coarse": 0.168696487,
+          "fine": 0.0935963322
+        },
+        "dn_fp16": {
+          "s1_eval_s": 3.838,
+          "coarse": 0.168595301,
+          "fine": 0.0936708421
+        },
+        "both_fp16": {
+          "s1_eval_s": 3.501,
+          "coarse": 0.1686705068,
+          "fine": 0.0936467802
+        },
+        "screen": "coarse +1.18e-4 / fine -2.06e-5，远小于 0.002 m 判死线"
+      },
+      "result_391": {
+        "same_session_arms": {
+          "base_fp32": {
+            "e2e_wall_s": 59.906,
+            "stage1_wall_s": 52.857,
+            "s1_eval_s": 36.7384,
+            "coarse": 0.1954406534,
+            "fine": 0.098085128,
+            "matched": [
+              5814099,
+              5813831
+            ]
+          },
+          "dn_fp16_only": {
+            "e2e_wall_s": 55.035,
+            "stage1_wall_s": 47.83,
+            "s1_eval_s": 30.276,
+            "coarse": 0.1954807058,
+            "fine": 0.0980720782,
+            "matched": [
+              5814080,
+              5813802
+            ]
+          },
+          "both_fp16": {
+            "e2e_wall_s": 44.948,
+            "stage1_wall_s": 38.23,
+            "s1_eval_s": 23.782,
+            "coarse": 0.1954574995,
+            "fine": 0.098064285,
+            "matched": [
+              5814108,
+              5813817
+            ]
+          }
+        },
+        "repeats_via_V8_TRT_FP16": [
+          {
+            "run": "fp16v85a",
+            "e2e_wall_s": 44.828,
+            "stage1_wall_s": 38.113,
+            "s2_wall_s": 6.71,
+            "s1_eval_s": 22.971
+          },
+          {
+            "run": "fp16v85b",
+            "e2e_wall_s": 44.842,
+            "stage1_wall_s": 37.615,
+            "s2_wall_s": 7.22,
+            "s1_eval_s": 23.338
+          }
+        ],
+        "paired_delta_s": {
+          "e2e": -14.95,
+          "s1_eval": -12.96,
+          "stage1_wall": -14.63
+        },
+        "accuracy": {
+          "coarse": 0.1954574995,
+          "fine": 0.098064285,
+          "matched": [
+            5814108,
+            5813817
+          ],
+          "delta_m": {
+            "coarse": 1.68e-05,
+            "fine": -2.08e-05
+          },
+          "matched_ratio": 1.0,
+          "s2_psnr": 25.114946365356445
+        },
+        "gates": {
+          "coarse_ok": true,
+          "fine_ok": true,
+          "matched_ok": true
+        }
+      },
+      "verdict": "PASS 且大幅超预期：391 配对 E2E 59.906 -> 44.83 s（-15.1 s，-25%），s1_eval 36.738 -> 23.0 s（-37%），精度增量 2e-5 m 量级，matched +9/-14（比例 1.0000），Stage2 PSNR 逐位不变。v8 目标 52-55 s 提前越过",
+      "provenance": {
+        "resi_engine": "bench_opt/goal/method_version/v8/engine/resnet50_neck_fp16.engine（55 MB，由 probe/resnet_lp/rn_fp16_build.json 记录，从同一冻结 checkpoint 的 resnet50_neck_v2.onnx 构建；同理副本仍留在 probe/resnet_lp/）",
+        "depth_engine": "bench_opt/goal/method_version/v8/engine/depthnet_predcn_fp16.engine（47 MB，ONNX opset11，FP16 内部，I/O FLOAT）",
+        "old_no_go": "v2 时代同一批 FP16 引擎判过 NO-GO —— 当时前向是 host 启动开销主导（未上 CUDA Graph），GPU 算术占不到关键路径；v7.3 之后才暴露出来"
+      },
+      "implementation": {
+        "switch": "eval_v5.py：V7_TRT_BACKBONE 分支内新增 V8_TRT_FP16=1 -> V7_TRT_ENGINE 指向 v8/engine/resnet50_neck_fp16.engine；j81_depthnet_trt 新增 V8_DN_TRT_FP16=1（默认引擎改为 depthnet_predcn_fp16.engine，builder 只置 FP16，仍 clear TF32/INT8/BF16）",
+        "parity_fp16_engine": "reduce_feat max 7.4e-2 / context 4.5e-1 / aspp_out 2.5e-1（特征级；最终指标增量 1e-5 m）"
+      },
+      "baseline_cmd": "V7_IMG_PRECACHE=u8 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1 V8_TRT_FP16=1 V8_DN_TRT=1 V8_DN_TRT_FP16=1 V5_SKIP_STEREO_HEAD=1 V7VER=v8.5 bash bench_opt/goal/method_version/v7/run_v7.sh <tag> 16"
+    }
+  ],
+  "new_baseline_after_v8_5": {
+    "config": "V7_IMG_PRECACHE=u8 V7_TRT_BACKBONE=1 V7_CUDA_GRAPH=1 V8_TRT_FP16=1 V8_DN_TRT=1 V8_DN_TRT_FP16=1 V5_SKIP_STEREO_HEAD=1",
+    "e2e_wall_s": 44.835,
+    "stage1_wall_s": 37.86,
+    "s1_eval_s": 23.05,
+    "coarse_Z_RMSE_m": 0.1954574995,
+    "fine_Z_RMSE_m": 0.098064285,
+    "matched": [
+      5814108,
+      5813817
+    ],
+    "s2_psnr": 25.114946365356445,
+    "vs_v5_6": "-54.7%（98.939 -> 44.835）",
+    "vs_v7_6": "-32.6%（66.571 -> 44.835）",
+    "vs_v8_3": "-28.5%（62.649 -> 44.835）"
+  }
+}
